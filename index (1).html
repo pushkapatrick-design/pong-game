@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pong + Quiz (Single Player, Rise-safe, Auto-Question)</title>
+<style>
+  :root{
+    --bg:#0b1e3a; --court:#0f2244; --line:#d9e1ff; --accent:#ffd700; --text:#ffffff;
+    --correct:#6dd57c; --wrong:#ff6767; --panel:#08152c; --shadow: rgba(0,0,0,.35);
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Helvetica,Arial,sans-serif}
+  header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px}
+  h1{margin:0;font-size:clamp(18px,3.2vw,24px);letter-spacing:.4px}
+  .controls{display:flex;gap:8px;flex-wrap:wrap}
+  .btn{appearance:none;border:0;background:var(--accent);color:#111;font-weight:800;padding:.5rem .75rem;border-radius:10px;cursor:pointer}
+  .btn.secondary{background:#e6edf7}
+  .hud{display:flex;gap:12px;align-items:center}
+  .hud .box{background:var(--panel);border:1px solid #1b2c4d;padding:.35rem .6rem;border-radius:10px;font-weight:800;min-width:96px;text-align:center}
+  .wrap{max-width:1100px;margin:0 auto;padding:0 16px 16px}
+  canvas{width:100%;max-width:1100px;aspect-ratio:16/9;background:var(--court);display:block;border-radius:16px;box-shadow:0 8px 30px var(--shadow)}
+  .legend{margin:.5rem 0 0;font-size:.9rem;opacity:.9}
+  /* Overlay modal (no <dialog>) */
+  .overlay{position:fixed; inset:0; display:none; align-items:center; justify-content:center; background:rgba(0,0,0,.55); z-index:9999; padding:16px;}
+  .overlay[aria-hidden="false"]{ display:flex; }
+  .card{ background:#0e1f3c; border-radius:16px; overflow:hidden; width:min(680px,92vw); box-shadow:0 12px 40px var(--shadow); }
+  .card header{padding:14px 16px;background:#10264a;display:flex;justify-content:space-between;align-items:center;gap:8px}
+  .card header h2{margin:0;font-size:1.05rem}
+  .content{padding:16px}
+  .q{font-size:1.05rem;line-height:1.4;margin:0 0 .5rem}
+  .answers{display:grid;gap:10px;margin-top:8px}
+  .answers label{display:flex;gap:8px;align-items:flex-start;background:#0b2a54;border:2px solid #1a3d75;border-radius:10px;padding:10px 12px;cursor:pointer}
+  .answers input{margin-top:3px}
+  .feedback{min-height:1.2rem;margin-top:8px;font-weight:700}
+  .feedback.correct{color:var(--correct)} .feedback.wrong{color:var(--wrong)}
+  .footer{display:flex;justify-content:flex-end;gap:8px;padding:0 16px 16px}
+  .warn{position:fixed;left:0;right:0;bottom:0;background:#ffdddd;color:#660000;padding:8px 12px;font-weight:800;text-align:center;display:none;z-index:10000}
+  .warn.show{display:block}
+</style>
+</head>
+<body>
+<header>
+  <h1>Pong + Quiz (Single Player)</h1>
+  <div class="hud">
+    <div class="box" id="leftScore">You: 0</div>
+    <div class="box" id="rightScore">AI: 0</div>
+  </div>
+  <div class="controls">
+    <button class="btn secondary" id="pauseBtn" title="Space">Pause</button>
+    <button class="btn secondary" id="resetBtn">Reset</button>
+    <button class="btn" id="testQuestionBtn" title="Show a question now">Test Question</button>
+  </div>
+</header>
+
+<div class="wrap">
+  <canvas id="game" width="1100" height="618" aria-label="Pong game"></canvas>
+  <p class="legend">Move with <b>W/S</b> or <b>↑/↓</b>. Press <b>Space</b> to pause/play.</p>
+</div>
+
+<!-- GAME/QUIZ CONFIG -->
+<script type="application/json" id="gameConfig">
+{
+  "questionTrigger": "onPlayerMiss",    /* onAnyScore | onPlayerMiss | onPlayerScore */
+  "requireCorrectToResume": false,
+  "autoShowFirstQuestion": true,         /* show a question on load so you can verify JS runs */
+  "autoShowDelayMs": 600
+}
+</script>
+
+<!-- JSON QUESTIONS: Edit this block to add/remove questions -->
+<script type="application/json" id="quizData">
+{
+  "mode": "sequence",           /* "sequence" or "shuffle" */
+  "questions": [
+    {
+      "type": "mc",
+      "question": "Before entering a high-risk area, what should you do first?",
+      "choices": ["Notify supervisor","Put on PPE","Complete a job brief","Inspect tools"],
+      "correctIndex": 2
+    },
+    {
+      "type": "tf",
+      "question": "It’s okay to share internal acronyms freely with customers.",
+      "choices": ["True", "False"],
+      "correctIndex": 1
+    },
+    {
+      "type": "mc",
+      "question": "Which one is NOT fall protection?",
+      "choices": ["Body belt","Full body harness","Guardrails","Safety net"],
+      "correctIndex": 0
+    },
+    {
+      "type": "mc",
+      "question": "When spotting a truck you should…",
+      "choices": ["Stand behind","Maintain eye contact","Use your phone","Climb on step"],
+      "correctIndex": 1
+    }
+  ]
+}
+</script>
+
+<!-- Modal overlay (no <dialog>) -->
+<div class="overlay" id="quizOverlay" aria-hidden="true" role="dialog" aria-labelledby="quizTitle">
+  <div class="card">
+    <header>
+      <h2 id="quizTitle">Quick Question</h2>
+      <div class="hud"><div class="box" id="qCounter">Q 1/1</div></div>
+    </header>
+    <div class="content">
+      <p class="q" id="qText"></p>
+      <div class="answers" id="qAnswers"></div>
+      <div id="feedback" class="feedback" aria-live="polite"></div>
+    </div>
+    <div class="footer">
+      <button class="btn secondary" id="submitBtn">Submit</button>
+      <button class="btn" id="continueBtn" disabled>Continue</button>
+    </div>
+  </div>
+</div>
+
+<div id="envWarn" class="warn">This page loaded, but the quiz overlay didn’t open. If you pasted code into a normal Embed block, scripts are likely sandboxed. Host the file and embed via iframe, or use Rise’s Custom Code block.</div>
+
+<script>
+/* ---------- PONG GAME (Canvas) ---------- */
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const pauseBtn = document.getElementById('pauseBtn');
+const resetBtn = document.getElementById('resetBtn');
+const testQuestionBtn = document.getElementById('testQuestionBtn');
+const leftScoreEl = document.getElementById('leftScore');
+const rightScoreEl = document.getElementById('rightScore');
+const envWarn = document.getElementById('envWarn');
+
+const W = canvas.width, H = canvas.height;
+const PADDLE_W = 14, PADDLE_H = 96, PADDLE_SPEED = 7;
+const AI_SPEED = 5.2, AI_TRACKING = 0.18;
+const BALL_R = 8, NET_W = 4, NET_GAP = 16;
+const START_SPEED = 5, SPEED_INC = 0.4;
+let keys = {};
+const left  = { x: 30, y: (H-PADDLE_H)/2, w: PADDLE_W, h: PADDLE_H, score: 0 };
+const right = { x: W-30-PADDLE_W, y: (H-PADDLE_H)/2, w: PADDLE_W, h: PADDLE_H, score: 0, ai:true };
+const ball  = { x: W/2, y: H/2, vx: START_SPEED * (Math.random()<.5?-1:1), vy: (Math.random()*2-1)*START_SPEED };
+let paused = false;
+
+function clamp(v, a, b){ return Math.max(a, Math.min(b, v)); }
+function resetBall(direction = (Math.random()<.5?-1:1)){
+  ball.x = W/2; ball.y = H/2; ball.vx = START_SPEED * direction; ball.vy = (Math.random()*2-1)*START_SPEED;
+}
+function drawCourt(){
+  ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--court').trim() || '#0f2244';
+  ctx.fillRect(0,0,W,H);
+  ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--line').trim() || '#d9e1ff';
+  for(let y=0; y<H; y+=NET_GAP){ ctx.fillRect(W/2 - NET_W/2, y, NET_W, NET_GAP/2); }
+}
+function draw(){
+  drawCourt();
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(left.x, left.y, left.w, left.h);
+  ctx.fillRect(right.x, right.y, right.w, right.h);
+  ctx.beginPath(); ctx.arc(ball.x, ball.y, BALL_R, 0, Math.PI*2); ctx.fill();
+}
+function update(){
+  if(paused) return;
+  if(keys['KeyW'] || keys['ArrowUp'])   left.y -= PADDLE_SPEED;
+  if(keys['KeyS'] || keys['ArrowDown']) left.y += PADDLE_SPEED;
+  left.y = clamp(left.y, 0, H-left.h);
+  const targetY = ball.y - right.h/2;
+  const dy = targetY - right.y;
+  right.y += clamp(dy * AI_TRACKING, -AI_SPEED, AI_SPEED);
+  right.y = clamp(right.y, 0, H-right.h);
+  ball.x += ball.vx; ball.y += ball.vy;
+  if(ball.y-BALL_R<=0 || ball.y+BALL_R>=H){ ball.vy *= -1; }
+  if(ball.x-BALL_R < left.x+left.w && ball.y > left.y && ball.y < left.y+left.h && ball.vx<0){
+    ball.vx = -ball.vx + SPEED_INC; const offset = (ball.y - (left.y + left.h/2)) / (left.h/2); ball.vy = offset * (START_SPEED+2);
+  }
+  if(ball.x+BALL_R > right.x && ball.y > right.y && ball.y < right.y+right.h && ball.vx>0){
+    ball.vx = -ball.vx - SPEED_INC; const offset = (ball.y - (right.y + right.h/2)) / (right.h/2); ball.vy = offset * (START_SPEED+2);
+  }
+  if(ball.x + BALL_R < 0){ right.score++; updateScoreUI(); pointScored('playerMiss'); }
+  else if(ball.x - BALL_R > W){ left.score++; updateScoreUI(); pointScored('playerScore'); }
+}
+function updateScoreUI(){ leftScoreEl.textContent = `You: ${left.score}`; rightScoreEl.textContent = `AI: ${right.score}`; }
+function loop(){ update(); draw(); requestAnimationFrame(loop); }
+document.addEventListener('keydown', (e)=>{ keys[e.code] = true; if(e.code === 'Space'){ togglePause(); e.preventDefault(); }});
+document.addEventListener('keyup', (e)=>{ keys[e.code] = false; });
+pauseBtn.addEventListener('click', togglePause);
+resetBtn.addEventListener('click', resetGame);
+testQuestionBtn.addEventListener('click', ()=>{ paused = true; openQuestion(nextQuestion()); });
+function togglePause(){ paused = !paused; pauseBtn.textContent = paused ? 'Play' : 'Pause'; }
+function resetGame(){ left.score = right.score = 0; updateScoreUI(); resetBall(); paused = false; pauseBtn.textContent = 'Pause'; }
+
+/* ---------- QUIZ (overlay, not <dialog>) ---------- */
+const overlay = document.getElementById('quizOverlay');
+const qText = document.getElementById('qText');
+const qAnswers = document.getElementById('qAnswers');
+const qCounter = document.getElementById('qCounter');
+const feedbackEl = document.getElementById('feedback');
+const submitBtn = document.getElementById('submitBtn');
+const continueBtn = document.getElementById('continueBtn');
+let quizIndex = 0;
+let quizData = { mode:'sequence', questions:[] };
+let gameConfig = { questionTrigger:'onPlayerMiss', requireCorrectToResume:false, autoShowFirstQuestion:true, autoShowDelayMs:600 };
+try{ gameConfig = JSON.parse(document.getElementById('gameConfig').textContent.trim()); }catch(_){}
+try{ quizData   = JSON.parse(document.getElementById('quizData').textContent.trim()); }catch(_){}
+if(quizData.mode === 'shuffle'){ quizData.questions.sort(()=>Math.random()-0.5); }
+function nextQuestion(){ if(quizData.questions.length===0) return null; const q = quizData.questions[quizIndex % quizData.questions.length]; quizIndex++; return q; }
+function openQuestion(q){
+  if(!q){ resumeAfterQuestion(); return; }
+  qText.textContent = q.question; qAnswers.innerHTML = ''; feedbackEl.textContent=''; feedbackEl.className='feedback';
+  q.choices.forEach((choice, i)=>{
+    const id = 'q_'+i; const label = document.createElement('label'); const radio = document.createElement('input'); const span = document.createElement('span');
+    radio.type='radio'; radio.name='answer'; radio.id=id; radio.value=i; span.textContent=choice; label.appendChild(radio); label.appendChild(span); qAnswers.appendChild(label);
+  });
+  qCounter.textContent = `Q ${((quizIndex-1)%quizData.questions.length)+1}/${quizData.questions.length}`;
+  submitBtn.onclick = (ev)=>{
+    ev.preventDefault();
+    const sel = document.querySelector('input[name="answer"]:checked');
+    if(!sel){ feedbackEl.textContent = 'Please choose an answer.'; return; }
+    const correct = Number(sel.value) === Number(q.correctIndex);
+    feedbackEl.textContent = correct ? 'Correct! 🎉' : 'Not quite. The correct answer is: ' + q.choices[q.correctIndex];
+    feedbackEl.className = 'feedback ' + (correct ? 'correct' : 'wrong');
+    continueBtn.disabled = (gameConfig.requireCorrectToResume === true) ? !correct : false;
+  };
+  continueBtn.onclick = (ev)=>{ ev.preventDefault(); resumeAfterQuestion(); };
+  overlay.setAttribute('aria-hidden','false');
+}
+function resumeAfterQuestion(){
+  overlay.setAttribute('aria-hidden','true'); continueBtn.disabled = true; feedbackEl.textContent='';
+  resetBall(Math.random()<.5?-1:1); paused = false; pauseBtn.textContent = 'Pause';
+}
+function pointScored(kind){
+  const trig = gameConfig.questionTrigger || 'onAnyScore';
+  const shouldAsk = (trig==='onAnyScore') || (trig==='onPlayerMiss' && kind==='playerMiss') || (trig==='onPlayerScore' && kind==='playerScore');
+  if(shouldAsk){ paused = true; pauseBtn.textContent = 'Play'; openQuestion(nextQuestion()); } else { resetBall(Math.random()<.5?-1:1); }
+}
+loop();
+/* Force a question soon after load so you can verify JS runs */
+setTimeout(()=>{
+  if(gameConfig.autoShowFirstQuestion){
+    paused = true;
+    openQuestion(nextQuestion());
+    setTimeout(()=>{
+      const hidden = overlay.getAttribute('aria-hidden') !== 'false';
+      if(hidden){ envWarn.classList.add('show'); }
+    }, 500);
+  }
+}, gameConfig.autoShowDelayMs || 600);
+</script>
+</body>
+</html>
