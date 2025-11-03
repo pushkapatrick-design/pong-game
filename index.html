@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Pong + Quiz (Single Player, Rise-safe, Auto-Question)</title>
+<title>Pong + Quiz (Fixed JSON Parsing)</title>
 <style>
   :root{
     --bg:#0b1e3a; --court:#0f2244; --line:#d9e1ff; --accent:#ffd700; --text:#ffffff;
@@ -21,7 +21,6 @@
   .wrap{max-width:1100px;margin:0 auto;padding:0 16px 16px}
   canvas{width:100%;max-width:1100px;aspect-ratio:16/9;background:var(--court);display:block;border-radius:16px;box-shadow:0 8px 30px var(--shadow)}
   .legend{margin:.5rem 0 0;font-size:.9rem;opacity:.9}
-  /* Overlay modal (no <dialog>) */
   .overlay{position:fixed; inset:0; display:none; align-items:center; justify-content:center; background:rgba(0,0,0,.55); z-index:9999; padding:16px;}
   .overlay[aria-hidden="false"]{ display:flex; }
   .card{ background:#0e1f3c; border-radius:16px; overflow:hidden; width:min(680px,92vw); box-shadow:0 12px 40px var(--shadow); }
@@ -58,20 +57,18 @@
   <p class="legend">Move with <b>W/S</b> or <b>↑/↓</b>. Press <b>Space</b> to pause/play.</p>
 </div>
 
-<!-- GAME/QUIZ CONFIG -->
 <script type="application/json" id="gameConfig">
 {
-  "questionTrigger": "onPlayerMiss",    /* onAnyScore | onPlayerMiss | onPlayerScore */
+  "questionTrigger": "onPlayerMiss",
   "requireCorrectToResume": false,
-  "autoShowFirstQuestion": true,         /* show a question on load so you can verify JS runs */
+  "autoShowFirstQuestion": true,
   "autoShowDelayMs": 600
 }
 </script>
 
-<!-- JSON QUESTIONS: Edit this block to add/remove questions -->
 <script type="application/json" id="quizData">
 {
-  "mode": "sequence",           /* "sequence" or "shuffle" */
+  "mode": "sequence",
   "questions": [
     {
       "type": "mc",
@@ -101,7 +98,6 @@
 }
 </script>
 
-<!-- Modal overlay (no <dialog>) -->
 <div class="overlay" id="quizOverlay" aria-hidden="true" role="dialog" aria-labelledby="quizTitle">
   <div class="card">
     <header>
@@ -120,10 +116,19 @@
   </div>
 </div>
 
-<div id="envWarn" class="warn">This page loaded, but the quiz overlay didn’t open. If you pasted code into a normal Embed block, scripts are likely sandboxed. Host the file and embed via iframe, or use Rise’s Custom Code block.</div>
+<div id="envWarn" class="warn">This page loaded, but the quiz overlay didn’t open. If you pasted code into a normal Embed block, scripts may be sandboxed. Host the file and embed via iframe, or use Rise’s Custom Code block.</div>
 
 <script>
-/* ---------- PONG GAME (Canvas) ---------- */
+function parseJSONWithComments(text){
+  try{
+    const noBlock = text.replace(/\/\*[\s\S]*?\*\//g, '');
+    const noLine = noBlock.replace(/(^|\s)\/\/.*$/gm, '');
+    return JSON.parse(noLine.trim());
+  }catch(e){
+    console.warn('JSON parse failed:', e);
+    return null;
+  }
+}
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
 const pauseBtn = document.getElementById('pauseBtn');
@@ -191,7 +196,6 @@ testQuestionBtn.addEventListener('click', ()=>{ paused = true; openQuestion(next
 function togglePause(){ paused = !paused; pauseBtn.textContent = paused ? 'Play' : 'Pause'; }
 function resetGame(){ left.score = right.score = 0; updateScoreUI(); resetBall(); paused = false; pauseBtn.textContent = 'Pause'; }
 
-/* ---------- QUIZ (overlay, not <dialog>) ---------- */
 const overlay = document.getElementById('quizOverlay');
 const qText = document.getElementById('qText');
 const qAnswers = document.getElementById('qAnswers');
@@ -200,10 +204,12 @@ const feedbackEl = document.getElementById('feedback');
 const submitBtn = document.getElementById('submitBtn');
 const continueBtn = document.getElementById('continueBtn');
 let quizIndex = 0;
-let quizData = { mode:'sequence', questions:[] };
-let gameConfig = { questionTrigger:'onPlayerMiss', requireCorrectToResume:false, autoShowFirstQuestion:true, autoShowDelayMs:600 };
-try{ gameConfig = JSON.parse(document.getElementById('gameConfig').textContent.trim()); }catch(_){}
-try{ quizData   = JSON.parse(document.getElementById('quizData').textContent.trim()); }catch(_){}
+
+let gameConfig = parseJSONWithComments(document.getElementById('gameConfig').textContent) || {
+  questionTrigger:'onPlayerMiss', requireCorrectToResume:false, autoShowFirstQuestion:true, autoShowDelayMs:600
+};
+let quizData = parseJSONWithComments(document.getElementById('quizData').textContent) || { mode:'sequence', questions:[] };
+
 if(quizData.mode === 'shuffle'){ quizData.questions.sort(()=>Math.random()-0.5); }
 function nextQuestion(){ if(quizData.questions.length===0) return null; const q = quizData.questions[quizIndex % quizData.questions.length]; quizIndex++; return q; }
 function openQuestion(q){
@@ -236,7 +242,7 @@ function pointScored(kind){
   if(shouldAsk){ paused = true; pauseBtn.textContent = 'Play'; openQuestion(nextQuestion()); } else { resetBall(Math.random()<.5?-1:1); }
 }
 loop();
-/* Force a question soon after load so you can verify JS runs */
+
 setTimeout(()=>{
   if(gameConfig.autoShowFirstQuestion){
     paused = true;
