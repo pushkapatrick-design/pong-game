@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Pong + Quiz (Fixed JSON Parsing)</title>
+<title>Pong + Quiz (Timer Starts Immediately)</title>
 <style>
   :root{
     --bg:#0b1e3a; --court:#0f2244; --line:#d9e1ff; --accent:#ffd700; --text:#ffffff;
@@ -16,14 +16,16 @@
   .controls{display:flex;gap:8px;flex-wrap:wrap}
   .btn{appearance:none;border:0;background:var(--accent);color:#111;font-weight:800;padding:.5rem .75rem;border-radius:10px;cursor:pointer}
   .btn.secondary{background:#e6edf7}
-  .hud{display:flex;gap:12px;align-items:center}
-  .hud .box{background:var(--panel);border:1px solid #1b2c4d;padding:.35rem .6rem;border-radius:10px;font-weight:800;min-width:96px;text-align:center}
+  .hud{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+  .hud .box{background:var(--panel);border:1px solid #1b2c4d;padding:.35rem .6rem;border-radius:10px;font-weight:800;min-width:110px;text-align:center}
   .wrap{max-width:1100px;margin:0 auto;padding:0 16px 16px}
   canvas{width:100%;max-width:1100px;aspect-ratio:16/9;background:var(--court);display:block;border-radius:16px;box-shadow:0 8px 30px var(--shadow)}
   .legend{margin:.5rem 0 0;font-size:.9rem;opacity:.9}
+
+  /* Overlays */
   .overlay{position:fixed; inset:0; display:none; align-items:center; justify-content:center; background:rgba(0,0,0,.55); z-index:9999; padding:16px;}
   .overlay[aria-hidden="false"]{ display:flex; }
-  .card{ background:#0e1f3c; border-radius:16px; overflow:hidden; width:min(680px,92vw); box-shadow:0 12px 40px var(--shadow); }
+  .card{ background:#0e1f3c; border-radius:16px; overflow:hidden; width:min(720px,92vw); box-shadow:0 12px 40px var(--shadow); }
   .card header{padding:14px 16px;background:#10264a;display:flex;justify-content:space-between;align-items:center;gap:8px}
   .card header h2{margin:0;font-size:1.05rem}
   .content{padding:16px}
@@ -34,8 +36,8 @@
   .feedback{min-height:1.2rem;margin-top:8px;font-weight:700}
   .feedback.correct{color:var(--correct)} .feedback.wrong{color:var(--wrong)}
   .footer{display:flex;justify-content:flex-end;gap:8px;padding:0 16px 16px}
-  .warn{position:fixed;left:0;right:0;bottom:0;background:#ffdddd;color:#660000;padding:8px 12px;font-weight:800;text-align:center;display:none;z-index:10000}
-  .warn.show{display:block}
+
+  .summary p{margin:.4rem 0}
 </style>
 </head>
 <body>
@@ -44,6 +46,7 @@
   <div class="hud">
     <div class="box" id="leftScore">You: 0</div>
     <div class="box" id="rightScore">AI: 0</div>
+    <div class="box" id="timerBox">Time: 00:30</div>
   </div>
   <div class="controls">
     <button class="btn secondary" id="pauseBtn" title="Space">Pause</button>
@@ -54,19 +57,21 @@
 
 <div class="wrap">
   <canvas id="game" width="1100" height="618" aria-label="Pong game"></canvas>
-  <p class="legend">Move with <b>W/S</b> or <b>↑/↓</b>. Press <b>Space</b> to pause/play.</p>
+  <p class="legend">Move with <b>W/S</b> or <b>↑/↓</b>. Press <b>Space</b> to pause/play. Game ends when the timer hits zero.</p>
 </div>
 
+<!-- GAME/QUIZ CONFIG -->
 <script type="application/json" id="gameConfig">
 {
   "questionTrigger": "onPlayerMiss",
   "requireCorrectToResume": false,
   "autoShowFirstQuestion": true,
-  "autoShowDelayMs": 600
+  "autoShowDelayMs": 600,
   "durationSeconds": 30
 }
 </script>
 
+<!-- JSON QUESTIONS -->
 <script type="application/json" id="quizData">
 {
   "mode": "sequence",
@@ -99,6 +104,7 @@
 }
 </script>
 
+<!-- Quiz Overlay -->
 <div class="overlay" id="quizOverlay" aria-hidden="true" role="dialog" aria-labelledby="quizTitle">
   <div class="card">
     <header>
@@ -117,19 +123,26 @@
   </div>
 </div>
 
-<div id="envWarn" class="warn">This page loaded, but the quiz overlay didn’t open. If you pasted code into a normal Embed block, scripts may be sandboxed. Host the file and embed via iframe, or use Rise’s Custom Code block.</div>
+<!-- Time Up / Summary Overlay -->
+<div class="overlay" id="endOverlay" aria-hidden="true" role="dialog" aria-labelledby="endTitle">
+  <div class="card">
+    <header>
+      <h2 id="endTitle">Time’s Up!</h2>
+    </header>
+    <div class="content summary">
+      <p id="summaryText"></p>
+    </div>
+    <div class="footer">
+      <button class="btn" id="playAgainBtn">Play Again</button>
+    </div>
+  </div>
+</div>
 
 <script>
-function parseJSONWithComments(text){
-  try{
-    const noBlock = text.replace(/\/\*[\s\S]*?\*\//g, '');
-    const noLine = noBlock.replace(/(^|\s)\/\/.*$/gm, '');
-    return JSON.parse(noLine.trim());
-  }catch(e){
-    console.warn('JSON parse failed:', e);
-    return null;
-  }
+function parseJSONSafe(text, fallback){
+  try{ return JSON.parse(text); }catch(e){ console.warn('JSON parse error:', e); return fallback; }
 }
+
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
 const pauseBtn = document.getElementById('pauseBtn');
@@ -137,7 +150,7 @@ const resetBtn = document.getElementById('resetBtn');
 const testQuestionBtn = document.getElementById('testQuestionBtn');
 const leftScoreEl = document.getElementById('leftScore');
 const rightScoreEl = document.getElementById('rightScore');
-const envWarn = document.getElementById('envWarn');
+const timerBox = document.getElementById('timerBox');
 
 const W = canvas.width, H = canvas.height;
 const PADDLE_W = 14, PADDLE_H = 96, PADDLE_SPEED = 7;
@@ -148,11 +161,21 @@ let keys = {};
 const left  = { x: 30, y: (H-PADDLE_H)/2, w: PADDLE_W, h: PADDLE_H, score: 0 };
 const right = { x: W-30-PADDLE_W, y: (H-PADDLE_H)/2, w: PADDLE_W, h: PADDLE_H, score: 0, ai:true };
 const ball  = { x: W/2, y: H/2, vx: START_SPEED * (Math.random()<.5?-1:1), vy: (Math.random()*2-1)*START_SPEED };
+
 let paused = false;
+let gameOver = false;
+
+// TIMER: starts immediately on load and keeps counting down even during pauses/questions
+const cfg = parseJSONSafe(document.getElementById('gameConfig').textContent, {});
+const durationMs = Math.max(5000, Number(cfg.durationSeconds || 30) * 1000);
+let endTime = performance.now() + durationMs;
+let timeLeft = durationMs;
 
 function clamp(v, a, b){ return Math.max(a, Math.min(b, v)); }
 function resetBall(direction = (Math.random()<.5?-1:1)){
-  ball.x = W/2; ball.y = H/2; ball.vx = START_SPEED * direction; ball.vy = (Math.random()*2-1)*START_SPEED;
+  ball.x = W/2; ball.y = H/2;
+  ball.vx = START_SPEED * direction;
+  ball.vy = (Math.random()*2-1)*START_SPEED;
 }
 function drawCourt(){
   ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--court').trim() || '#0f2244';
@@ -168,36 +191,102 @@ function draw(){
   ctx.beginPath(); ctx.arc(ball.x, ball.y, BALL_R, 0, Math.PI*2); ctx.fill();
 }
 function update(){
-  if(paused) return;
+  if(paused || gameOver) return;
+
   if(keys['KeyW'] || keys['ArrowUp'])   left.y -= PADDLE_SPEED;
   if(keys['KeyS'] || keys['ArrowDown']) left.y += PADDLE_SPEED;
   left.y = clamp(left.y, 0, H-left.h);
+
   const targetY = ball.y - right.h/2;
   const dy = targetY - right.y;
   right.y += clamp(dy * AI_TRACKING, -AI_SPEED, AI_SPEED);
   right.y = clamp(right.y, 0, H-right.h);
+
   ball.x += ball.vx; ball.y += ball.vy;
+
   if(ball.y-BALL_R<=0 || ball.y+BALL_R>=H){ ball.vy *= -1; }
+
   if(ball.x-BALL_R < left.x+left.w && ball.y > left.y && ball.y < left.y+left.h && ball.vx<0){
-    ball.vx = -ball.vx + SPEED_INC; const offset = (ball.y - (left.y + left.h/2)) / (left.h/2); ball.vy = offset * (START_SPEED+2);
+    ball.vx = -ball.vx + SPEED_INC;
+    const offset = (ball.y - (left.y + left.h/2)) / (left.h/2);
+    ball.vy = offset * (START_SPEED+2);
   }
   if(ball.x+BALL_R > right.x && ball.y > right.y && ball.y < right.y+right.h && ball.vx>0){
-    ball.vx = -ball.vx - SPEED_INC; const offset = (ball.y - (right.y + right.h/2)) / (right.h/2); ball.vy = offset * (START_SPEED+2);
+    ball.vx = -ball.vx - SPEED_INC;
+    const offset = (ball.y - (right.y + right.h/2)) / (right.h/2);
+    ball.vy = offset * (START_SPEED+2);
   }
-  if(ball.x + BALL_R < 0){ right.score++; updateScoreUI(); pointScored('playerMiss'); }
-  else if(ball.x - BALL_R > W){ left.score++; updateScoreUI(); pointScored('playerScore'); }
-}
-function updateScoreUI(){ leftScoreEl.textContent = `You: ${left.score}`; rightScoreEl.textContent = `AI: ${right.score}`; }
-function loop(){ update(); draw(); requestAnimationFrame(loop); }
-document.addEventListener('keydown', (e)=>{ keys[e.code] = true; if(e.code === 'Space'){ togglePause(); e.preventDefault(); }});
-document.addEventListener('keyup', (e)=>{ keys[e.code] = false; });
-pauseBtn.addEventListener('click', togglePause);
-resetBtn.addEventListener('click', resetGame);
-testQuestionBtn.addEventListener('click', ()=>{ paused = true; openQuestion(nextQuestion()); });
-function togglePause(){ paused = !paused; pauseBtn.textContent = paused ? 'Play' : 'Pause'; }
-function resetGame(){ left.score = right.score = 0; updateScoreUI(); resetBall(); paused = false; pauseBtn.textContent = 'Pause'; }
 
-const overlay = document.getElementById('quizOverlay');
+  if(ball.x + BALL_R < 0){
+    right.score++; updateScoreUI(); pointScored('playerMiss');
+  } else if(ball.x - BALL_R > W){
+    left.score++; updateScoreUI(); pointScored('playerScore');
+  }
+}
+function updateScoreUI(){
+  leftScoreEl.textContent = `You: ${left.score}`;
+  rightScoreEl.textContent = `AI: ${right.score}`;
+}
+function loop(){
+  // Timer ticks regardless of pause so questions don't stop the clock
+  tickTimer();
+  update();
+  draw();
+  requestAnimationFrame(loop);
+}
+document.addEventListener('keydown', (e)=>{
+  keys[e.code] = true;
+  if(e.code === 'Space'){ togglePause(); e.preventDefault(); }
+});
+document.addEventListener('keyup', (e)=>{ keys[e.code] = false; });
+
+pauseBtn.addEventListener('click', togglePause);
+resetBtn.addEventListener('click', hardReset);
+testQuestionBtn.addEventListener('click', ()=>{
+  if(gameOver) return;
+  paused = true; openQuestion(nextQuestion());
+});
+function togglePause(){
+  if(gameOver) return;
+  paused = !paused;
+  pauseBtn.textContent = paused ? 'Play' : 'Pause';
+}
+function hardReset(){
+  left.score = right.score = 0;
+  updateScoreUI();
+  resetBall();
+  paused = false; gameOver = false;
+  // restart timer immediately
+  endTime = performance.now() + durationMs;
+  timeLeft = durationMs;
+  updateTimerUI(timeLeft);
+  pauseBtn.textContent = 'Pause';
+  hideEndOverlay();
+}
+
+/* Timer */
+function tickTimer(){
+  if(gameOver) return;
+  timeLeft = Math.max(0, Math.floor(endTime - performance.now()));
+  updateTimerUI(timeLeft);
+  if(timeLeft <= 0){
+    endGame();
+  }
+}
+function updateTimerUI(ms){
+  const total = Math.ceil(ms / 1000);
+  const mm = String(Math.floor(total/60)).padStart(2,'0');
+  const ss = String(total%60).padStart(2,'0');
+  timerBox.textContent = `Time: ${mm}:${ss}`;
+}
+function endGame(){
+  gameOver = true;
+  paused = true;
+  showEndOverlay();
+}
+
+/* Quiz */
+const quizOverlay = document.getElementById('quizOverlay');
 const qText = document.getElementById('qText');
 const qAnswers = document.getElementById('qAnswers');
 const qCounter = document.getElementById('qCounter');
@@ -206,10 +295,10 @@ const submitBtn = document.getElementById('submitBtn');
 const continueBtn = document.getElementById('continueBtn');
 let quizIndex = 0;
 
-let gameConfig = parseJSONWithComments(document.getElementById('gameConfig').textContent) || {
-  questionTrigger:'onPlayerMiss', requireCorrectToResume:false, autoShowFirstQuestion:true, autoShowDelayMs:600
-};
-let quizData = parseJSONWithComments(document.getElementById('quizData').textContent) || { mode:'sequence', questions:[] };
+let gameConfig = parseJSONSafe(document.getElementById('gameConfig').textContent, {
+  questionTrigger:'onPlayerMiss', requireCorrectToResume:false, autoShowFirstQuestion:true, autoShowDelayMs:600, durationSeconds:30
+});
+let quizData = parseJSONSafe(document.getElementById('quizData').textContent, { mode:'sequence', questions:[] });
 
 if(quizData.mode === 'shuffle'){ quizData.questions.sort(()=>Math.random()-0.5); }
 function nextQuestion(){ if(quizData.questions.length===0) return null; const q = quizData.questions[quizIndex % quizData.questions.length]; quizIndex++; return q; }
@@ -231,29 +320,58 @@ function openQuestion(q){
     continueBtn.disabled = (gameConfig.requireCorrectToResume === true) ? !correct : false;
   };
   continueBtn.onclick = (ev)=>{ ev.preventDefault(); resumeAfterQuestion(); };
-  overlay.setAttribute('aria-hidden','false');
+  quizOverlay.setAttribute('aria-hidden','false');
 }
 function resumeAfterQuestion(){
-  overlay.setAttribute('aria-hidden','true'); continueBtn.disabled = true; feedbackEl.textContent='';
+  quizOverlay.setAttribute('aria-hidden','true');
+  continueBtn.disabled = true; feedbackEl.textContent='';
   resetBall(Math.random()<.5?-1:1); paused = false; pauseBtn.textContent = 'Pause';
 }
 function pointScored(kind){
   const trig = gameConfig.questionTrigger || 'onAnyScore';
-  const shouldAsk = (trig==='onAnyScore') || (trig==='onPlayerMiss' && kind==='playerMiss') || (trig==='onPlayerScore' && kind==='playerScore');
-  if(shouldAsk){ paused = true; pauseBtn.textContent = 'Play'; openQuestion(nextQuestion()); } else { resetBall(Math.random()<.5?-1:1); }
+  const shouldAsk =
+    (trig==='onAnyScore') ||
+    (trig==='onPlayerMiss' && kind==='playerMiss') ||
+    (trig==='onPlayerScore' && kind==='playerScore');
+  if(shouldAsk && !gameOver){
+    paused = true; pauseBtn.textContent = 'Play';
+    openQuestion(nextQuestion());
+  } else {
+    resetBall(Math.random()<.5?-1:1);
+  }
 }
-loop();
 
+/* End overlay / summary */
+const endOverlay = document.getElementById('endOverlay');
+const summaryText = document.getElementById('summaryText');
+const playAgainBtn = document.getElementById('playAgainBtn');
+
+function showEndOverlay(){
+  summaryText.textContent = `Final score — You: ${left.score} • AI: ${right.score}`;
+  endOverlay.setAttribute('aria-hidden','false');
+}
+function hideEndOverlay(){
+  endOverlay.setAttribute('aria-hidden','true');
+}
+playAgainBtn.addEventListener('click', ()=>{
+  hideEndOverlay();
+  hardReset();
+  if(gameConfig.autoShowFirstQuestion){
+    paused = true; openQuestion(nextQuestion());
+  }
+});
+
+/* Initialize: timer shows immediately */
+updateTimerUI(timeLeft);
 setTimeout(()=>{
   if(gameConfig.autoShowFirstQuestion){
     paused = true;
     openQuestion(nextQuestion());
-    setTimeout(()=>{
-      const hidden = overlay.getAttribute('aria-hidden') !== 'false';
-      if(hidden){ envWarn.classList.add('show'); }
-    }, 500);
   }
 }, gameConfig.autoShowDelayMs || 600);
+
+loop();
 </script>
 </body>
 </html>
+
