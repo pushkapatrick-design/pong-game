@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Pong + Quiz (Start Screen + Timer on Acknowledge)</title>
+<title>Pong + Quiz (Intro + Timer + End Options)</title>
 <style>
   :root{
     --bg:#0b1e3a; --court:#0f2244; --line:#d9e1ff; --accent:#ffd700; --text:#ffffff;
@@ -107,7 +107,7 @@
 </script>
 
 <!-- Intro / Instructions Overlay -->
-<div class="overlay" id="introOverlay" aria-hidden="false" role="dialog" aria-labelledby="introTitle">
+<div class="overlay" id="introOverlay" aria-hidden="false" style="display:flex" role="dialog" aria-labelledby="introTitle">
   <div class="card">
     <header>
       <h2 id="introTitle">How to Play</h2>
@@ -147,7 +147,7 @@
   </div>
 </div>
 
-<!-- Time Up / Summary Overlay -->
+<!-- Time Up / Summary Overlay with Play Again & Continue -->
 <div class="overlay" id="endOverlay" aria-hidden="true" role="dialog" aria-labelledby="endTitle">
   <div class="card">
     <header>
@@ -155,8 +155,10 @@
     </header>
     <div class="content summary">
       <p id="summaryText"></p>
+      <p id="summaryHint" style="opacity:.9;margin-top:.6rem">Choose <b>Play Again</b> to restart with a fresh timer, or <b>Continue</b> to practice without a timer or questions.</p>
     </div>
     <div class="footer">
+      <button class="btn secondary" id="continuePracticeBtn">Continue</button>
       <button class="btn" id="playAgainBtn">Play Again</button>
     </div>
   </div>
@@ -189,6 +191,7 @@ const ball  = { x: W/2, y: H/2, vx: START_SPEED * (Math.random()<.5?-1:1), vy: (
 let paused = true;       // start paused behind the intro overlay
 let gameOver = false;
 let gameStarted = false; // becomes true after learner clicks Start
+let practiceMode = false; // becomes true if learner chooses Continue after time-up
 
 // Timer state (starts only after Start button)
 const cfg = parseJSONSafe(document.getElementById('gameConfig').textContent, {});
@@ -263,6 +266,7 @@ function loop(){
 document.addEventListener('keydown', (e)=>{
   keys[e.code] = true;
   if(e.code === 'Space'){ togglePause(); e.preventDefault(); }
+  if(e.code === 'Enter' && !gameStarted){ startGame(); }
 });
 document.addEventListener('keyup', (e)=>{ keys[e.code] = false; });
 
@@ -270,6 +274,7 @@ pauseBtn.addEventListener('click', togglePause);
 resetBtn.addEventListener('click', hardReset);
 testQuestionBtn.addEventListener('click', ()=>{
   if(gameOver || !gameStarted) return;
+  if(practiceMode) return; // no questions in practice mode
   paused = true; openQuestion(nextQuestion());
 });
 function togglePause(){
@@ -282,7 +287,7 @@ function hardReset(){
   updateScoreUI();
   resetBall();
   // Return to intro screen state
-  paused = true; gameOver = false; gameStarted = false;
+  paused = true; gameOver = false; gameStarted = false; practiceMode = false;
   endTime = 0; timeLeft = durationMs;
   updateTimerUI(timeLeft);
   pauseBtn.textContent = 'Pause';
@@ -292,7 +297,7 @@ function hardReset(){
 
 /* Timer */
 function tickTimer(){
-  if(!gameStarted || gameOver) { updateTimerUI(timeLeft); return; }
+  if(!gameStarted || gameOver || practiceMode) { updateTimerUI(timeLeft); return; }
   timeLeft = Math.max(0, Math.floor(endTime - performance.now()));
   updateTimerUI(timeLeft);
   if(timeLeft <= 0){
@@ -353,6 +358,7 @@ function resumeAfterQuestion(){
   resetBall(Math.random()<.5?-1:1); paused = false; pauseBtn.textContent = 'Pause';
 }
 function pointScored(kind){
+  if(practiceMode) { resetBall(Math.random()<.5?-1:1); return; } // no questions in practice mode
   const trig = gameConfig.questionTrigger || 'onAnyScore';
   const shouldAsk =
     (trig==='onAnyScore') ||
@@ -369,7 +375,9 @@ function pointScored(kind){
 /* End overlay / summary */
 const endOverlay = document.getElementById('endOverlay');
 const summaryText = document.getElementById('summaryText');
+const summaryHint = document.getElementById('summaryHint');
 const playAgainBtn = document.getElementById('playAgainBtn');
+const continuePracticeBtn = document.getElementById('continuePracticeBtn');
 
 function showEndOverlay(){
   summaryText.textContent = `Final score — You: ${left.score} • AI: ${right.score}`;
@@ -382,23 +390,40 @@ playAgainBtn.addEventListener('click', ()=>{
   hideEndOverlay();
   hardReset();
 });
+continuePracticeBtn.addEventListener('click', ()=>{
+  // enter practice mode: no timer, no questions, just free play
+  practiceMode = true;
+  gameOver = false;
+  timeLeft = 0;
+  updateTimerUI(timeLeft);
+  hideEndOverlay();
+  paused = false;
+  pauseBtn.textContent = 'Pause';
+  resetBall(Math.random()<.5?-1:1);
+});
 
-/* Intro overlay controls */
+/* Intro overlay controls + forced show */
 const introOverlay = document.getElementById('introOverlay');
 const startBtn = document.getElementById('startBtn');
-function showIntro(){ introOverlay.setAttribute('aria-hidden','false'); }
-function hideIntro(){ introOverlay.setAttribute('aria-hidden','true'); }
-startBtn.addEventListener('click', ()=>{
+function showIntro(){ introOverlay.style.display = 'flex'; introOverlay.setAttribute('aria-hidden','false'); }
+function hideIntro(){ introOverlay.setAttribute('aria-hidden','true'); introOverlay.style.display = 'none'; }
+
+function startGame(){
   gameStarted = true;
+  practiceMode = false;
   paused = false;
   hideIntro();
-  startTimerNow();         // start the clock only after acknowledge
-  // Optional: if you want a first question right away, toggle this:
+  startTimerNow();
   if(gameConfig.autoShowFirstQuestion){
     paused = true;
     setTimeout(()=>openQuestion(nextQuestion()), gameConfig.autoShowDelayMs || 300);
   }
-});
+}
+startBtn.addEventListener('click', startGame);
+
+// Fallbacks to ensure visibility in any environment (Rise iFrame etc.)
+document.addEventListener('DOMContentLoaded', ()=>{ showIntro(); });
+requestAnimationFrame(()=>{ showIntro(); });
 
 /* Initialize */
 updateTimerUI(timeLeft);
