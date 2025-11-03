@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Pong + Quiz (Timer Starts Immediately)</title>
+<title>Pong + Quiz (Start Screen + Timer on Acknowledge)</title>
 <style>
   :root{
     --bg:#0b1e3a; --court:#0f2244; --line:#d9e1ff; --accent:#ffd700; --text:#ffffff;
@@ -25,7 +25,7 @@
   /* Overlays */
   .overlay{position:fixed; inset:0; display:none; align-items:center; justify-content:center; background:rgba(0,0,0,.55); z-index:9999; padding:16px;}
   .overlay[aria-hidden="false"]{ display:flex; }
-  .card{ background:#0e1f3c; border-radius:16px; overflow:hidden; width:min(720px,92vw); box-shadow:0 12px 40px var(--shadow); }
+  .card{ background:#0e1f3c; border-radius:16px; overflow:hidden; width:min(760px,92vw); box-shadow:0 12px 40px var(--shadow); }
   .card header{padding:14px 16px;background:#10264a;display:flex;justify-content:space-between;align-items:center;gap:8px}
   .card header h2{margin:0;font-size:1.05rem}
   .content{padding:16px}
@@ -38,6 +38,8 @@
   .footer{display:flex;justify-content:flex-end;gap:8px;padding:0 16px 16px}
 
   .summary p{margin:.4rem 0}
+  ul.instructions{margin:0 0 12px 18px;padding:0}
+  ul.instructions li{margin:.35rem 0}
 </style>
 </head>
 <body>
@@ -65,7 +67,7 @@
 {
   "questionTrigger": "onPlayerMiss",
   "requireCorrectToResume": false,
-  "autoShowFirstQuestion": true,
+  "autoShowFirstQuestion": false,
   "autoShowDelayMs": 600,
   "durationSeconds": 30
 }
@@ -103,6 +105,28 @@
   ]
 }
 </script>
+
+<!-- Intro / Instructions Overlay -->
+<div class="overlay" id="introOverlay" aria-hidden="false" role="dialog" aria-labelledby="introTitle">
+  <div class="card">
+    <header>
+      <h2 id="introTitle">How to Play</h2>
+    </header>
+    <div class="content">
+      <ul class="instructions">
+        <li><b>Move:</b> <kbd>W/S</kbd> or <kbd>↑/↓</kbd></li>
+        <li><b>Pause/Play:</b> <kbd>Space</kbd> or the Pause button</li>
+        <li><b>Goal:</b> Keep the ball in play and score against the AI.</li>
+        <li><b>Timer:</b> You have <span id="introDuration">30</span> seconds. The timer starts after you click <b>Start</b>.</li>
+        <li><b>Questions:</b> A question appears when you miss (configurable). Answer to resume.</li>
+      </ul>
+      <p style="opacity:.9">Tip: Click inside the game if the keyboard doesn’t respond.</p>
+    </div>
+    <div class="footer">
+      <button class="btn" id="startBtn">Start</button>
+    </div>
+  </div>
+</div>
 
 <!-- Quiz Overlay -->
 <div class="overlay" id="quizOverlay" aria-hidden="true" role="dialog" aria-labelledby="quizTitle">
@@ -162,14 +186,17 @@ const left  = { x: 30, y: (H-PADDLE_H)/2, w: PADDLE_W, h: PADDLE_H, score: 0 };
 const right = { x: W-30-PADDLE_W, y: (H-PADDLE_H)/2, w: PADDLE_W, h: PADDLE_H, score: 0, ai:true };
 const ball  = { x: W/2, y: H/2, vx: START_SPEED * (Math.random()<.5?-1:1), vy: (Math.random()*2-1)*START_SPEED };
 
-let paused = false;
+let paused = true;       // start paused behind the intro overlay
 let gameOver = false;
+let gameStarted = false; // becomes true after learner clicks Start
 
-// TIMER: starts immediately on load and keeps counting down even during pauses/questions
+// Timer state (starts only after Start button)
 const cfg = parseJSONSafe(document.getElementById('gameConfig').textContent, {});
 const durationMs = Math.max(5000, Number(cfg.durationSeconds || 30) * 1000);
-let endTime = performance.now() + durationMs;
+let endTime = 0;
 let timeLeft = durationMs;
+
+document.getElementById('introDuration').textContent = Math.ceil(durationMs/1000);
 
 function clamp(v, a, b){ return Math.max(a, Math.min(b, v)); }
 function resetBall(direction = (Math.random()<.5?-1:1)){
@@ -228,7 +255,6 @@ function updateScoreUI(){
   rightScoreEl.textContent = `AI: ${right.score}`;
 }
 function loop(){
-  // Timer ticks regardless of pause so questions don't stop the clock
   tickTimer();
   update();
   draw();
@@ -243,11 +269,11 @@ document.addEventListener('keyup', (e)=>{ keys[e.code] = false; });
 pauseBtn.addEventListener('click', togglePause);
 resetBtn.addEventListener('click', hardReset);
 testQuestionBtn.addEventListener('click', ()=>{
-  if(gameOver) return;
+  if(gameOver || !gameStarted) return;
   paused = true; openQuestion(nextQuestion());
 });
 function togglePause(){
-  if(gameOver) return;
+  if(gameOver || !gameStarted) return;
   paused = !paused;
   pauseBtn.textContent = paused ? 'Play' : 'Pause';
 }
@@ -255,18 +281,18 @@ function hardReset(){
   left.score = right.score = 0;
   updateScoreUI();
   resetBall();
-  paused = false; gameOver = false;
-  // restart timer immediately
-  endTime = performance.now() + durationMs;
-  timeLeft = durationMs;
+  // Return to intro screen state
+  paused = true; gameOver = false; gameStarted = false;
+  endTime = 0; timeLeft = durationMs;
   updateTimerUI(timeLeft);
   pauseBtn.textContent = 'Pause';
   hideEndOverlay();
+  showIntro();
 }
 
 /* Timer */
 function tickTimer(){
-  if(gameOver) return;
+  if(!gameStarted || gameOver) { updateTimerUI(timeLeft); return; }
   timeLeft = Math.max(0, Math.floor(endTime - performance.now()));
   updateTimerUI(timeLeft);
   if(timeLeft <= 0){
@@ -279,10 +305,9 @@ function updateTimerUI(ms){
   const ss = String(total%60).padStart(2,'0');
   timerBox.textContent = `Time: ${mm}:${ss}`;
 }
-function endGame(){
-  gameOver = true;
-  paused = true;
-  showEndOverlay();
+function startTimerNow(){
+  endTime = performance.now() + durationMs;
+  timeLeft = durationMs;
 }
 
 /* Quiz */
@@ -296,7 +321,7 @@ const continueBtn = document.getElementById('continueBtn');
 let quizIndex = 0;
 
 let gameConfig = parseJSONSafe(document.getElementById('gameConfig').textContent, {
-  questionTrigger:'onPlayerMiss', requireCorrectToResume:false, autoShowFirstQuestion:true, autoShowDelayMs:600, durationSeconds:30
+  questionTrigger:'onPlayerMiss', requireCorrectToResume:false, autoShowFirstQuestion:false, autoShowDelayMs:600, durationSeconds:30
 });
 let quizData = parseJSONSafe(document.getElementById('quizData').textContent, { mode:'sequence', questions:[] });
 
@@ -333,7 +358,7 @@ function pointScored(kind){
     (trig==='onAnyScore') ||
     (trig==='onPlayerMiss' && kind==='playerMiss') ||
     (trig==='onPlayerScore' && kind==='playerScore');
-  if(shouldAsk && !gameOver){
+  if(shouldAsk && !gameOver && gameStarted){
     paused = true; pauseBtn.textContent = 'Play';
     openQuestion(nextQuestion());
   } else {
@@ -356,22 +381,28 @@ function hideEndOverlay(){
 playAgainBtn.addEventListener('click', ()=>{
   hideEndOverlay();
   hardReset();
+});
+
+/* Intro overlay controls */
+const introOverlay = document.getElementById('introOverlay');
+const startBtn = document.getElementById('startBtn');
+function showIntro(){ introOverlay.setAttribute('aria-hidden','false'); }
+function hideIntro(){ introOverlay.setAttribute('aria-hidden','true'); }
+startBtn.addEventListener('click', ()=>{
+  gameStarted = true;
+  paused = false;
+  hideIntro();
+  startTimerNow();         // start the clock only after acknowledge
+  // Optional: if you want a first question right away, toggle this:
   if(gameConfig.autoShowFirstQuestion){
-    paused = true; openQuestion(nextQuestion());
+    paused = true;
+    setTimeout(()=>openQuestion(nextQuestion()), gameConfig.autoShowDelayMs || 300);
   }
 });
 
-/* Initialize: timer shows immediately */
+/* Initialize */
 updateTimerUI(timeLeft);
-setTimeout(()=>{
-  if(gameConfig.autoShowFirstQuestion){
-    paused = true;
-    openQuestion(nextQuestion());
-  }
-}, gameConfig.autoShowDelayMs || 600);
-
 loop();
 </script>
 </body>
 </html>
-
