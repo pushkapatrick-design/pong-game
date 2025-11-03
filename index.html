@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Pong + Quiz (Intro + Timer + End Options)</title>
+<title>Pong + Quiz (End Popup Failsafe)</title>
 <style>
   :root{
     --bg:#0b1e3a; --court:#0f2244; --line:#d9e1ff; --accent:#ffd700; --text:#ffffff;
@@ -23,9 +23,9 @@
   .legend{margin:.5rem 0 0;font-size:.9rem;opacity:.9}
 
   /* Overlays */
-  .overlay{position:fixed; inset:0; display:none; align-items:center; justify-content:center; background:rgba(0,0,0,.55); z-index:9999; padding:16px;}
-  .overlay[aria-hidden="false"]{ display:flex; }
-  .card{ background:#0e1f3c; border-radius:16px; overflow:hidden; width:min(760px,92vw); box-shadow:0 12px 40px var(--shadow); }
+  .overlay{position:fixed; inset:0; display:none; align-items:center; justify-content:center; background:rgba(0,0,0,.6); z-index:999999; padding:16px;}
+  .overlay[aria-hidden="false"]{ display:flex !important; }
+  .card{ background:#0e1f3c; border-radius:16px; overflow:hidden; width:min(760px,92vw); box-shadow:0 12px 40px var(--shadow); border:2px solid #213a6b;}
   .card header{padding:14px 16px;background:#10264a;display:flex;justify-content:space-between;align-items:center;gap:8px}
   .card header h2{margin:0;font-size:1.05rem}
   .content{padding:16px}
@@ -36,10 +36,12 @@
   .feedback{min-height:1.2rem;margin-top:8px;font-weight:700}
   .feedback.correct{color:var(--correct)} .feedback.wrong{color:var(--wrong)}
   .footer{display:flex;justify-content:flex-end;gap:8px;padding:0 16px 16px}
-
   .summary p{margin:.4rem 0}
   ul.instructions{margin:0 0 12px 18px;padding:0}
   ul.instructions li{margin:.35rem 0}
+
+  /* Debug banner (optional) */
+  #debug{position:fixed;left:8px;bottom:8px;background:#10264a;color:#d9e1ff;border:1px solid #274a8f;border-radius:8px;padding:6px 8px;font:12px/1.2 monospace;opacity:.85;z-index:1000000}
 </style>
 </head>
 <body>
@@ -78,40 +80,18 @@
 {
   "mode": "sequence",
   "questions": [
-    {
-      "type": "mc",
-      "question": "Before entering a high-risk area, what should you do first?",
-      "choices": ["Notify supervisor","Put on PPE","Complete a job brief","Inspect tools"],
-      "correctIndex": 2
-    },
-    {
-      "type": "tf",
-      "question": "It’s okay to share internal acronyms freely with customers.",
-      "choices": ["True", "False"],
-      "correctIndex": 1
-    },
-    {
-      "type": "mc",
-      "question": "Which one is NOT fall protection?",
-      "choices": ["Body belt","Full body harness","Guardrails","Safety net"],
-      "correctIndex": 0
-    },
-    {
-      "type": "mc",
-      "question": "When spotting a truck you should…",
-      "choices": ["Stand behind","Maintain eye contact","Use your phone","Climb on step"],
-      "correctIndex": 1
-    }
+    {"type": "mc","question": "Before entering a high-risk area, what should you do first?","choices": ["Notify supervisor","Put on PPE","Complete a job brief","Inspect tools"],"correctIndex": 2},
+    {"type": "tf","question": "It’s okay to share internal acronyms freely with customers.","choices": ["True", "False"],"correctIndex": 1},
+    {"type": "mc","question": "Which one is NOT fall protection?","choices": ["Body belt","Full body harness","Guardrails","Safety net"],"correctIndex": 0},
+    {"type": "mc","question": "When spotting a truck you should…","choices": ["Stand behind","Maintain eye contact","Use your phone","Climb on step"],"correctIndex": 1}
   ]
 }
 </script>
 
-<!-- Intro / Instructions Overlay -->
+<!-- Intro -->
 <div class="overlay" id="introOverlay" aria-hidden="false" style="display:flex" role="dialog" aria-labelledby="introTitle">
   <div class="card">
-    <header>
-      <h2 id="introTitle">How to Play</h2>
-    </header>
+    <header><h2 id="introTitle">How to Play</h2></header>
     <div class="content">
       <ul class="instructions">
         <li><b>Move:</b> <kbd>W/S</kbd> or <kbd>↑/↓</kbd></li>
@@ -128,13 +108,10 @@
   </div>
 </div>
 
-<!-- Quiz Overlay -->
+<!-- Quiz -->
 <div class="overlay" id="quizOverlay" aria-hidden="true" role="dialog" aria-labelledby="quizTitle">
   <div class="card">
-    <header>
-      <h2 id="quizTitle">Quick Question</h2>
-      <div class="hud"><div class="box" id="qCounter">Q 1/1</div></div>
-    </header>
+    <header><h2 id="quizTitle">Quick Question</h2><div class="hud"><div class="box" id="qCounter">Q 1/1</div></div></header>
     <div class="content">
       <p class="q" id="qText"></p>
       <div class="answers" id="qAnswers"></div>
@@ -147,12 +124,10 @@
   </div>
 </div>
 
-<!-- Time Up / Summary Overlay with Play Again & Continue -->
+<!-- End-of-time overlay -->
 <div class="overlay" id="endOverlay" aria-hidden="true" role="dialog" aria-labelledby="endTitle">
   <div class="card">
-    <header>
-      <h2 id="endTitle">Time’s Up!</h2>
-    </header>
+    <header><h2 id="endTitle">Time’s Up!</h2></header>
     <div class="content summary">
       <p id="summaryText"></p>
       <p id="summaryHint" style="opacity:.9;margin-top:.6rem">Choose <b>Play Again</b> to restart with a fresh timer, or <b>Continue</b> to practice without a timer or questions.</p>
@@ -164,10 +139,17 @@
   </div>
 </div>
 
+<!-- Debug banner -->
+<div id="debug" aria-hidden="true">state: boot</div>
+
 <script>
+function log(...a){ try{ console.log('[PONG]', ...a); }catch(e){} }
 function parseJSONSafe(text, fallback){
-  try{ return JSON.parse(text); }catch(e){ console.warn('JSON parse error:', e); return fallback; }
+  try{ return JSON.parse(text); }catch(e){ log('JSON parse error:', e); return fallback; }
 }
+
+const debugEl = document.getElementById('debug');
+function dbg(s){ debugEl.textContent = s; }
 
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
@@ -190,15 +172,14 @@ const ball  = { x: W/2, y: H/2, vx: START_SPEED * (Math.random()<.5?-1:1), vy: (
 
 let paused = true;       // start paused behind the intro overlay
 let gameOver = false;
-let gameStarted = false; // becomes true after learner clicks Start
-let practiceMode = false; // becomes true if learner chooses Continue after time-up
+let gameStarted = false;
+let practiceMode = false;
 
-// Timer state (starts only after Start button)
+// Timer
 const cfg = parseJSONSafe(document.getElementById('gameConfig').textContent, {});
 const durationMs = Math.max(5000, Number(cfg.durationSeconds || 30) * 1000);
 let endTime = 0;
 let timeLeft = durationMs;
-
 document.getElementById('introDuration').textContent = Math.ceil(durationMs/1000);
 
 function clamp(v, a, b){ return Math.max(a, Math.min(b, v)); }
@@ -253,10 +234,7 @@ function update(){
     left.score++; updateScoreUI(); pointScored('playerScore');
   }
 }
-function updateScoreUI(){
-  leftScoreEl.textContent = `You: ${left.score}`;
-  rightScoreEl.textContent = `AI: ${right.score}`;
-}
+function updateScoreUI(){ leftScoreEl.textContent = `You: ${left.score}`; rightScoreEl.textContent = `AI: ${right.score}`; }
 function loop(){
   tickTimer();
   update();
@@ -286,7 +264,6 @@ function hardReset(){
   left.score = right.score = 0;
   updateScoreUI();
   resetBall();
-  // Return to intro screen state
   paused = true; gameOver = false; gameStarted = false; practiceMode = false;
   endTime = 0; timeLeft = durationMs;
   updateTimerUI(timeLeft);
@@ -308,11 +285,20 @@ function updateTimerUI(ms){
   const total = Math.ceil(ms / 1000);
   const mm = String(Math.floor(total/60)).padStart(2,'0');
   const ss = String(total%60).padStart(2,'0');
-  timerBox.textContent = `Time: ${mm}:${ss}`;
+  const s = `Time: ${mm}:${ss}`;
+  timerBox.textContent = s;
+  dbg(`t=${mm}:${ss} | started:${gameStarted} paused:${paused} over:${gameOver} practice:${practiceMode}`);
 }
 function startTimerNow(){
   endTime = performance.now() + durationMs;
   timeLeft = durationMs;
+  // Failsafe: force end overlay even if RAF stalls (e.g., sandbox weirdness)
+  setTimeout(()=>{ 
+    if(!gameOver && gameStarted && !practiceMode){
+      log('Failsafe timeout hit, forcing endGame()'); 
+      endGame(); 
+    }
+  }, durationMs + 250);
 }
 
 /* Quiz */
@@ -358,7 +344,7 @@ function resumeAfterQuestion(){
   resetBall(Math.random()<.5?-1:1); paused = false; pauseBtn.textContent = 'Pause';
 }
 function pointScored(kind){
-  if(practiceMode) { resetBall(Math.random()<.5?-1:1); return; } // no questions in practice mode
+  if(practiceMode) { resetBall(Math.random()<.5?-1:1); return; }
   const trig = gameConfig.questionTrigger || 'onAnyScore';
   const shouldAsk =
     (trig==='onAnyScore') ||
@@ -375,23 +361,30 @@ function pointScored(kind){
 /* End overlay / summary */
 const endOverlay = document.getElementById('endOverlay');
 const summaryText = document.getElementById('summaryText');
-const summaryHint = document.getElementById('summaryHint');
 const playAgainBtn = document.getElementById('playAgainBtn');
 const continuePracticeBtn = document.getElementById('continuePracticeBtn');
 
 function showEndOverlay(){
   summaryText.textContent = `Final score — You: ${left.score} • AI: ${right.score}`;
+  endOverlay.style.display = 'flex'; // hard show
   endOverlay.setAttribute('aria-hidden','false');
 }
 function hideEndOverlay(){
   endOverlay.setAttribute('aria-hidden','true');
+  endOverlay.style.display = 'none';
 }
+function endGame(){
+  log('endGame() called');
+  gameOver = true;
+  paused = true;
+  showEndOverlay();
+}
+
 playAgainBtn.addEventListener('click', ()=>{
   hideEndOverlay();
   hardReset();
 });
 continuePracticeBtn.addEventListener('click', ()=>{
-  // enter practice mode: no timer, no questions, just free play
   practiceMode = true;
   gameOver = false;
   timeLeft = 0;
@@ -407,7 +400,6 @@ const introOverlay = document.getElementById('introOverlay');
 const startBtn = document.getElementById('startBtn');
 function showIntro(){ introOverlay.style.display = 'flex'; introOverlay.setAttribute('aria-hidden','false'); }
 function hideIntro(){ introOverlay.setAttribute('aria-hidden','true'); introOverlay.style.display = 'none'; }
-
 function startGame(){
   gameStarted = true;
   practiceMode = false;
@@ -420,10 +412,8 @@ function startGame(){
   }
 }
 startBtn.addEventListener('click', startGame);
-
-// Fallbacks to ensure visibility in any environment (Rise iFrame etc.)
-document.addEventListener('DOMContentLoaded', ()=>{ showIntro(); });
-requestAnimationFrame(()=>{ showIntro(); });
+document.addEventListener('DOMContentLoaded', showIntro);
+requestAnimationFrame(showIntro);
 
 /* Initialize */
 updateTimerUI(timeLeft);
@@ -431,3 +421,4 @@ loop();
 </script>
 </body>
 </html>
+
